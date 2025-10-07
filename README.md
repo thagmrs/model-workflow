@@ -28,7 +28,7 @@ The model predicts **real estate prices** based on property type, area, location
 ## ⚙️ Solution Architecture
 
 <p align="center">
-  <img src="docs/arquitetura.png" alt="MLOps pipeline architecture" width="850"/>
+  <img src="docs/arquit.png" alt="MLOps pipeline architecture" width="850"/>
 </p>
 
 ---
