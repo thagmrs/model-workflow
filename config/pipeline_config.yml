@@ -1,0 +1,8 @@
+aws_account_id: 
+aws_region: 
+ecr_training_repo: 
+ecr_inference_repo: 
+terraform_state_bucket: 
+terraform_lock_table: 
+project_name:   
+action: 

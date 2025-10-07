@@ -1,0 +1,116 @@
+name: MLOps Pipeline Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Action to perform (apply or destroy)"
+        required: true
+        default: "apply"
+        type: choice
+        options:
+          - apply
+          - destroy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      CONFIG_FILE: config/pipeline_config.yml
+
+    steps:
+      - name: 🧾 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Load pipeline config and export variables
+        run: |
+          pip install pyyaml
+          python3 - <<'EOF'
+          import yaml, os
+
+          CONFIG_PATH = "config/pipeline_config.yml"
+
+          print(f"📂 Loading configuration from {CONFIG_PATH}...")
+          with open(CONFIG_PATH) as f:
+              cfg = yaml.safe_load(f)
+
+          print("🔁 Exporting variables:")
+          with open(os.environ["GITHUB_ENV"], "a") as envfile:
+              for key, val in cfg.items():
+                  key_upper = key.strip().upper()
+                  value = str(val).strip().replace('"', '')
+                  print(f"  {key_upper}: {value}")
+                  envfile.write(f"{key_upper}={value}\n")
+          EOF
+
+
+      - name: 🪣 Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: 🐳 Login to ECR
+        run: |
+          if [ -z "$AWS_ACCOUNT_ID" ]; then
+            echo "❌ AWS_ACCOUNT_ID not defined!"; exit 1;
+          fi
+          echo "🔑 Logging into ECR: $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+          aws ecr get-login-password --region $AWS_REGION | \
+            docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+
+      # -------------------------------------
+      # TRAINING IMAGE
+      # -------------------------------------
+      - name: 🏗️ Build training image
+        run: |
+          cd src/training
+          docker build -t $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/${ECR_TRAINING_REPO}:latest .
+          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/${ECR_TRAINING_REPO}:latest
+
+      # -------------------------------------
+      # INFERENCE IMAGE
+      # -------------------------------------
+      - name: 🧠 Build inference image
+        run: |
+          cd src/inference
+          docker build -t $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/${ECR_INFERENCE_REPO}:predictor .
+          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/${ECR_INFERENCE_REPO}:predictor
+
+      # -------------------------------------
+      # TERRAFORM INIT + PLAN
+      # -------------------------------------
+      - name: 🏗️ Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.6.6
+
+      - name: 📦 Terraform Init
+        working-directory: infra
+        run: terraform init -input=false
+
+      - name: 🧮 Terraform Plan
+        working-directory: infra
+        run: terraform plan -out=tfplan -input=false
+
+      # -------------------------------------
+      # APPLY or DESTROY
+      # -------------------------------------
+      - name: 🚀 Apply or Destroy Terraform
+        working-directory: infra
+        run: |
+          ACTION="${{ env.ACTION }}"
+          if [ -z "$ACTION" ]; then ACTION="apply"; fi
+
+          if [ "$ACTION" = "destroy" ]; then
+            echo "🧨 Running terraform destroy..."
+            terraform destroy -auto-approve
+          else
+            echo "🚀 Running terraform apply..."
+            terraform apply -auto-approve tfplan
+          fi
